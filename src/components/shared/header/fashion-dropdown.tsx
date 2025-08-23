@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { ChevronDown } from "lucide-react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 
 // Default categories as fallback
 const defaultFashionCategories = {
@@ -211,30 +210,38 @@ export default function FashionDropdown() {
                       پوشاک مردانه
                     </h3>
                     <div className="space-y-2">
-                      <Link
-                        href="/fashion-search?category=men&query=erkek%20giyim"
-                        className="block text-sm text-gray-600 hover:text-green-600 transition-colors text-right"
+                      <span
+                        onClick={() =>
+                          handleCategoryClick("پوشاک مردانه", "پیراهن و شلوار")
+                        }
+                        className="block text-sm text-gray-600 hover:text-green-600 transition-colors text-right cursor-pointer"
                       >
                         پیراهن و شلوار
-                      </Link>
-                      <Link
-                        href="/fashion-search?category=men&query=erkek%20ayakkabı"
-                        className="block text-sm text-gray-600 hover:text-green-600 transition-colors text-right"
+                      </span>
+                      <span
+                        onClick={() =>
+                          handleCategoryClick("پوشاک مردانه", "کفش مردانه")
+                        }
+                        className="block text-sm text-gray-600 hover:text-green-600 transition-colors text-right cursor-pointer"
                       >
                         کفش مردانه
-                      </Link>
-                      <Link
-                        href="/fashion-search?category=men&query=erkek%20ceket"
-                        className="block text-sm text-gray-600 hover:text-green-600 transition-colors text-right"
+                      </span>
+                      <span
+                        onClick={() =>
+                          handleCategoryClick("پوشاک مردانه", "کت و ژاکت")
+                        }
+                        className="block text-sm text-gray-600 hover:text-green-600 transition-colors text-right cursor-pointer"
                       >
                         کت و ژاکت
-                      </Link>
-                      <Link
-                        href="/fashion-search?category=men&query=erkek%20tişört"
-                        className="block text-sm text-gray-600 hover:text-green-600 transition-colors text-right"
+                      </span>
+                      <span
+                        onClick={() =>
+                          handleCategoryClick("پوشاک مردانه", "تی‌شرت")
+                        }
+                        className="block text-sm text-gray-600 hover:text-green-600 transition-colors text-right cursor-pointer"
                       >
                         تی‌شرت
-                      </Link>
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -246,24 +253,30 @@ export default function FashionDropdown() {
                       پوشاک کودکان
                     </h3>
                     <div className="space-y-2">
-                      <Link
-                        href="/fashion-search?category=kids&query=çocuk%20giyim"
-                        className="block text-sm text-gray-600 hover:text-green-600 transition-colors text-right"
+                      <span
+                        onClick={() =>
+                          handleCategoryClick("پوشاک کودکان", "لباس کودک")
+                        }
+                        className="block text-sm text-gray-600 hover:text-green-600 transition-colors text-right cursor-pointer"
                       >
                         لباس کودک
-                      </Link>
-                      <Link
-                        href="/fashion-search?category=kids&query=çocuk%20ayakkabı"
-                        className="block text-sm text-gray-600 hover:text-green-600 transition-colors text-right"
+                      </span>
+                      <span
+                        onClick={() =>
+                          handleCategoryClick("پوشاک کودکان", "کفش کودک")
+                        }
+                        className="block text-sm text-gray-600 hover:text-green-600 transition-colors text-right cursor-pointer"
                       >
                         کفش کودک
-                      </Link>
-                      <Link
-                        href="/fashion-search?category=kids&query=çocuk%20oyuncak"
-                        className="block text-sm text-gray-600 hover:text-green-600 transition-colors text-right"
+                      </span>
+                      <span
+                        onClick={() =>
+                          handleCategoryClick("پوشاک کودکان", "اسباب بازی")
+                        }
+                        className="block text-sm text-gray-600 hover:text-green-600 transition-colors text-right cursor-pointer"
                       >
                         اسباب بازی
-                      </Link>
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -275,24 +288,30 @@ export default function FashionDropdown() {
                       لوازم جانبی
                     </h3>
                     <div className="space-y-2">
-                      <Link
-                        href="/fashion-search?category=accessories&query=aksesuar"
-                        className="block text-sm text-gray-600 hover:text-green-600 transition-colors text-right"
+                      <span
+                        onClick={() =>
+                          handleCategoryClick("لوازم جانبی", "کیف و کوله")
+                        }
+                        className="block text-sm text-gray-600 hover:text-green-600 transition-colors text-right cursor-pointer"
                       >
                         کیف و کوله
-                      </Link>
-                      <Link
-                        href="/fashion-search?category=accessories&query=saat"
-                        className="block text-sm text-gray-600 hover:text-green-600 transition-colors text-right"
+                      </span>
+                      <span
+                        onClick={() =>
+                          handleCategoryClick("لوازم جانبی", "ساعت")
+                        }
+                        className="block text-sm text-gray-600 hover:text-green-600 transition-colors text-right cursor-pointer"
                       >
                         ساعت
-                      </Link>
-                      <Link
-                        href="/fashion-search?category=accessories&query=güneş%20gözlüğü"
-                        className="block text-sm text-gray-600 hover:text-green-600 transition-colors text-right"
+                      </span>
+                      <span
+                        onClick={() =>
+                          handleCategoryClick("لوازم جانبی", "عینک آفتابی")
+                        }
+                        className="block text-sm text-gray-600 hover:text-green-600 transition-colors text-right cursor-pointer"
                       >
                         عینک آفتابی
-                      </Link>
+                      </span>
                     </div>
                   </div>
                 </div>
