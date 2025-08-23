@@ -3,6 +3,14 @@ import { getJson } from "serpapi";
 import { connectToDatabase } from "@/lib/db";
 import DiscountProduct from "@/lib/db/models/discount-product.model";
 import { convertTRYToRial } from "@/lib/utils";
+import {
+  getCachedDiscountProducts,
+  setCachedDiscountProducts,
+  DISCOUNT_CACHE_KEYS,
+  CACHE_DURATIONS,
+  isCacheValid,
+  getCacheAge,
+} from "@/lib/discount-cache";
 
 // Turkish search queries for products under 6 million Rials (excluding women's products)
 const searchQueries = [
@@ -139,50 +147,89 @@ export async function GET(request: NextRequest) {
     console.log("🔍 Starting products under 6 million Rials fetch...");
     const url = new URL(request.url);
     const forceRefresh = url.searchParams.get("refresh") === "true";
+    const isWarmup = url.searchParams.get("warmup") === "true";
 
-    // 1) Try DB first (unless forceRefresh)
-    await connectToDatabase();
-    if (!forceRefresh) {
-      const dbProducts = await DiscountProduct.find({
-        priceInRial: { $lt: MAX_PRICE_RIAL },
-      })
-        .sort({ createdAt: -1 })
-        .limit(50) // Increased from 40 to 50 to ensure we have enough
-        .lean();
-
-      if (dbProducts && dbProducts.length >= 16) {
-        // Changed from 40 to 16
+    // 1) Try Redis cache first (unless forceRefresh or warmup)
+    if (!forceRefresh && !isWarmup) {
+      const redisCache = await getCachedDiscountProducts(
+        DISCOUNT_CACHE_KEYS.PRODUCTS_UNDER_6M
+      );
+      if (
+        redisCache &&
+        redisCache.products &&
+        redisCache.products.length >= 16
+      ) {
+        const cacheAge = getCacheAge(redisCache.timestamp);
         console.log(
-          `✅ Returning ${dbProducts.length} products under 6M Rials from DB cache`
+          `✅ Returning ${redisCache.products.length} products under 6M Rials from Redis cache (age: ${cacheAge} minutes)`
         );
         return NextResponse.json({
-          products: dbProducts.slice(0, 50), // Return all found products
-          total: dbProducts.length,
-          message: `${dbProducts.length} محصول زیر ۶ میلیون ریال از کش دیتابیس یافت شد`,
+          ...redisCache,
           cached: true,
-          source: "db",
+          source: "redis",
+          cacheAge: `${cacheAge} minutes`,
         });
       }
     }
 
-    // 2) Check in-memory cache
+    // 2) Try DB cache (unless forceRefresh)
+    await connectToDatabase();
+    if (!forceRefresh) {
+      const dbProducts = await DiscountProduct.find({
+        priceInRial: { $lt: MAX_PRICE_RIAL },
+        expiresAt: { $gt: new Date() }, // Only non-expired products
+      })
+        .sort({ lastRefreshed: -1, createdAt: -1 })
+        .limit(100)
+        .lean();
+
+      if (dbProducts && dbProducts.length >= 16) {
+        console.log(
+          `✅ Returning ${dbProducts.length} products under 6M Rials from DB cache`
+        );
+
+        // Store in Redis for faster future access
+        const responseData = {
+          products: dbProducts.slice(0, 50),
+          total: dbProducts.length,
+          message: `${dbProducts.length} محصول زیر ۶ میلیون ریال از کش دیتابیس یافت شد`,
+          cached: true,
+          source: "db",
+          timestamp: Date.now(),
+          version: 1,
+        };
+
+        // Cache in Redis for 72 hours
+        await setCachedDiscountProducts(
+          DISCOUNT_CACHE_KEYS.PRODUCTS_UNDER_6M,
+          responseData,
+          CACHE_DURATIONS.PRODUCTS_UNDER_6M
+        );
+
+        return NextResponse.json(responseData);
+      }
+    }
+
+    // 3) Check in-memory cache (fallback)
     const now = Date.now();
     if (
       !forceRefresh &&
       productsCache &&
       now - productsCache.timestamp < productsCache.ttl
     ) {
-      console.log("✅ Returning cached products under 6M Rials");
+      console.log("✅ Returning cached products under 6M Rials from memory");
       return NextResponse.json({
         products: productsCache.data,
         total: productsCache.data.length,
         message: `${productsCache.data.length} محصول زیر ۶ میلیون ریال از کش حافظه یافت شد`,
         cached: true,
         source: "memory",
+        timestamp: productsCache.timestamp,
+        version: 1,
       });
     }
 
-    // 3) Check if API keys are available
+    // 4) Check if API keys are available
     if (!process.env.SERPAPI_KEY) {
       console.error("❌ SERPAPI_KEY is not configured");
       return NextResponse.json(
@@ -191,6 +238,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    console.log("🔄 Fetching fresh data from SerpAPI...");
     let allProducts: ShoppingProduct[] = [];
 
     // Shuffle queries for diverse results
@@ -341,10 +389,10 @@ export async function GET(request: NextRequest) {
         index === self.findIndex((p) => p.title === product.title)
     );
 
-    // Sort by price (cheapest first) and take top 50 products (increased from 40)
+    // Sort by price (cheapest first) and take top 50 products
     const finalProducts = uniqueProducts
       .sort((a, b) => a.priceInRial - b.priceInRial)
-      .slice(0, 50); // Increased from 40 to 50
+      .slice(0, 50);
 
     console.log(
       `✅ Found ${finalProducts.length} unique products under 6M Rials`
@@ -370,17 +418,19 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // 4) Store in database
+    // 5) Store in database with 72-hour TTL
     try {
       // Clear existing products first
       await DiscountProduct.deleteMany({});
 
-      // Insert new products
+      // Insert new products with extended TTL
       const bulkOps = finalProducts.map((p) => ({
         insertOne: {
           document: {
             ...p,
-            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours TTL
+            expiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000), // 72 hours TTL
+            lastRefreshed: new Date(),
+            cacheVersion: 1,
           },
         },
       }));
@@ -388,21 +438,15 @@ export async function GET(request: NextRequest) {
       if (bulkOps.length > 0) {
         await DiscountProduct.bulkWrite(bulkOps, { ordered: false });
         console.log(
-          `💾 Stored ${bulkOps.length} products under 6M Rials in DB`
+          `💾 Stored ${bulkOps.length} products under 6M Rials in DB (72-hour TTL)`
         );
       }
     } catch (e) {
       console.error("❌ Error storing products in DB:", e);
     }
 
-    // 5) Cache the results in memory
-    productsCache = {
-      data: finalProducts,
-      timestamp: now,
-      ttl: CACHE_TTL,
-    };
-
-    return NextResponse.json({
+    // 6) Cache the results in Redis (72 hours) and memory (30 minutes)
+    const responseData = {
       products: finalProducts,
       total: finalProducts.length,
       message:
@@ -411,7 +455,25 @@ export async function GET(request: NextRequest) {
           : "هیچ محصولی زیر ۶ میلیون ریال یافت نشد",
       cached: false,
       source: "serpapi",
-    });
+      timestamp: now,
+      version: 1,
+    };
+
+    // Store in Redis for 72 hours
+    await setCachedDiscountProducts(
+      DISCOUNT_CACHE_KEYS.PRODUCTS_UNDER_6M,
+      responseData,
+      CACHE_DURATIONS.PRODUCTS_UNDER_6M
+    );
+
+    // Cache in memory for 30 minutes
+    productsCache = {
+      data: finalProducts,
+      timestamp: now,
+      ttl: CACHE_TTL,
+    };
+
+    return NextResponse.json(responseData);
   } catch (error) {
     console.error("❌ Error in products under 6M Rials search:", error);
     return NextResponse.json(

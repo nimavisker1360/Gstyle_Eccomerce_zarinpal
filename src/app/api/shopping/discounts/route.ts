@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { getJson } from "serpapi";
 import { connectToDatabase } from "@/lib/db";
 import DiscountProduct from "@/lib/db/models/discount-product.model";
+import {
+  getCachedDiscountProducts,
+  setCachedDiscountProducts,
+  DISCOUNT_CACHE_KEYS,
+  CACHE_DURATIONS,
+  getCacheAge,
+} from "@/lib/discount-cache";
 
 // Curated fashion-focused queries (targeting popular Turkish fashion retailers)
 const discountQueries = [
@@ -68,12 +75,39 @@ export async function GET(request: NextRequest) {
     console.log("🔍 Starting discount products fetch...");
     const url = new URL(request.url);
     const forceRefresh = url.searchParams.get("refresh") === "true";
+    const isWarmup = url.searchParams.get("warmup") === "true";
 
-    // 1) Try DB (daily cache) first: limit 40 items priced under 2000 TRY (unless forceRefresh)
+    // 1) Try Redis cache first (unless forceRefresh or warmup)
+    if (!forceRefresh && !isWarmup) {
+      const redisCache = await getCachedDiscountProducts(
+        DISCOUNT_CACHE_KEYS.DISCOUNT_PRODUCTS
+      );
+      if (
+        redisCache &&
+        redisCache.products &&
+        redisCache.products.length >= 40
+      ) {
+        const cacheAge = getCacheAge(redisCache.timestamp);
+        console.log(
+          `✅ Returning ${redisCache.products.length} discount products from Redis cache (age: ${cacheAge} minutes)`
+        );
+        return NextResponse.json({
+          ...redisCache,
+          cached: true,
+          source: "redis",
+          cacheAge: `${cacheAge} minutes`,
+        });
+      }
+    }
+
+    // 2) Try DB (daily cache) first: limit 40 items priced under 2000 TRY (unless forceRefresh)
     await connectToDatabase();
     if (!forceRefresh) {
-      const dbProducts = await DiscountProduct.find({ price: { $lt: 2000 } })
-        .sort({ createdAt: -1 })
+      const dbProducts = await DiscountProduct.find({
+        price: { $lt: 2000 },
+        expiresAt: { $gt: new Date() }, // Only non-expired products
+      })
+        .sort({ lastRefreshed: -1, createdAt: -1 })
         .limit(100)
         .lean();
 
@@ -86,30 +120,45 @@ export async function GET(request: NextRequest) {
         console.log(
           `✅ Returning ${normalized.length} under-2000₺ products from DB daily cache`
         );
-        return NextResponse.json({
+
+        // Store in Redis for faster future access
+        const responseData = {
           products: normalized.slice(0, 40),
           total: Math.min(normalized.length, 40),
           message: `${Math.min(normalized.length, 40)} محصول زیر ۲۰۰۰ لیر از کش روزانه (DB) یافت شد`,
           cached: true,
           source: "db",
-        });
+          timestamp: Date.now(),
+          version: 1,
+        };
+
+        // Cache in Redis for 24 hours
+        await setCachedDiscountProducts(
+          DISCOUNT_CACHE_KEYS.DISCOUNT_PRODUCTS,
+          responseData,
+          CACHE_DURATIONS.DISCOUNT_PRODUCTS
+        );
+
+        return NextResponse.json(responseData);
       }
     }
 
-    // 2) Fall back to in-memory cache
+    // 3) Fall back to in-memory cache
     const now = Date.now();
     if (
       !forceRefresh &&
       discountCache &&
       now - discountCache.timestamp < discountCache.ttl
     ) {
-      console.log("✅ Returning cached discount products");
+      console.log("✅ Returning cached discount products from memory");
       return NextResponse.json({
         products: discountCache.data,
         total: discountCache.data.length,
-        message: `${discountCache.data.length} محصول تخفیف‌دار از کش یافت شد`,
+        message: `${discountCache.data.length} محصول تخفیف از کش حافظه یافت شد`,
         cached: true,
         source: "memory",
+        timestamp: discountCache.timestamp,
+        version: 1,
       });
     }
 
@@ -438,28 +487,37 @@ export async function GET(request: NextRequest) {
       console.error("❌ Error upserting discount products to DB:", e);
     }
 
-    // 4) Cache the results in memory
+    // After processing and storing in DB, also cache in Redis
+    const responseData = {
+      products: finalProducts,
+      total: finalProducts.length,
+      message: `${finalProducts.length} محصول تخفیف یافت شد`,
+      cached: false,
+      source: "serpapi",
+      timestamp: now,
+      version: 1,
+    };
+
+    // Store in Redis for 24 hours
+    await setCachedDiscountProducts(
+      DISCOUNT_CACHE_KEYS.DISCOUNT_PRODUCTS,
+      responseData,
+      CACHE_DURATIONS.DISCOUNT_PRODUCTS
+    );
+
+    // Cache in memory for 10 minutes
     discountCache = {
       data: finalProducts,
       timestamp: now,
       ttl: DISCOUNT_CACHE_TTL,
     };
 
-    return NextResponse.json({
-      products: finalProducts,
-      total: finalProducts.length,
-      message:
-        finalProducts.length > 0
-          ? `${finalProducts.length} محصول زیر ۲۰۰۰ لیر یافت شد`
-          : "هیچ محصولی زیر ۲۰۰۰ لیر یافت نشد",
-      cached: false,
-      source: "serpapi",
-    });
+    return NextResponse.json(responseData);
   } catch (error) {
     console.error("❌ Error in discount products search:", error);
     return NextResponse.json(
       {
-        error: "خطا در جستجوی محصولات تخفیف‌دار",
+        error: "خطا در جستجوی محصولات تخفیف",
         products: [],
         total: 0,
       },

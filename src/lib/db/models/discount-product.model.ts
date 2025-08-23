@@ -19,7 +19,9 @@ export interface IDiscountProduct extends Document {
   delivery: string;
   priceInRial?: number; // Price in Iranian Rials
   createdAt: Date;
-  expiresAt: Date; // TTL for daily cache
+  expiresAt: Date; // TTL for 72-hour cache
+  lastRefreshed: Date; // Track when data was last refreshed
+  cacheVersion: number; // Track cache version for invalidation
 }
 
 export interface IDiscountProductModel extends Model<IDiscountProduct> {}
@@ -46,15 +48,21 @@ const discountProductSchema = new Schema<IDiscountProduct>(
     createdAt: { type: Date, default: Date.now },
     expiresAt: {
       type: Date,
-      default: () => new Date(Date.now() + 24 * 60 * 60 * 1000),
+      default: () => new Date(Date.now() + 72 * 60 * 60 * 1000), // 72 hours TTL
       index: { expireAfterSeconds: 0 },
     },
+    lastRefreshed: { type: Date, default: Date.now },
+    cacheVersion: { type: Number, default: 1 },
   },
   { timestamps: true }
 );
 
+// Optimized indexes for better performance
 discountProductSchema.index({ createdAt: -1 });
 discountProductSchema.index({ priceInRial: 1 }); // Index for price filtering
+discountProductSchema.index({ expiresAt: 1 }); // Index for TTL
+discountProductSchema.index({ lastRefreshed: -1 }); // Index for refresh tracking
+discountProductSchema.index({ cacheVersion: 1 }); // Index for cache version
 
 const DiscountProduct =
   (models.DiscountProduct as IDiscountProductModel) ||
